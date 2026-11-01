@@ -1,0 +1,12 @@
+.venv
+.env
+.env.*
+docs
+spike
+tests
+scripts
+supabase
+.github
+.claude
+.mcp.json
+**/__pycache__

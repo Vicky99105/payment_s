@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --frozen
+      - name: Type check
+        run: uv run mypy backend
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+      - name: Dependency audit
+        run: uv run pip-audit

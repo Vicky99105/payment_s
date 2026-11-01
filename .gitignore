@@ -10,3 +10,15 @@ docs/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Throwaway Vercel Queues spike
+spike/
+
+# Vercel CLI link
+.vercel
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
