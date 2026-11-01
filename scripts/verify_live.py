@@ -1,6 +1,6 @@
 """Runs the assignment's success criteria plus the security checks against a deployed URL.
 
-Usage: python scripts/verify_live.py https://payment-s.vercel.app
+Usage: python -m scripts.verify_live https://payment-s.vercel.app
 Reads WEBHOOK_SIGNING_SECRET, REVIEWER_API_KEY and DATABASE_URL from the environment / .env.
 DATABASE_URL is used read-only, to count webhook deliveries (not exposed by the API).
 Set FAULT_INJECTION_ENABLED=1 only when the deployment has SETTLEMENT_FAULT_INJECTION=true.

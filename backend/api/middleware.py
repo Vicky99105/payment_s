@@ -1,6 +1,7 @@
 """Pure ASGI middleware: request ids, security headers and a hard request-body size limit."""
 
 import json
+import time
 import uuid
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -26,6 +27,27 @@ class RequestIdMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_id)
+
+
+class ServerTimingMiddleware:
+    """Adds `Server-Timing: app;dur=<ms>` so latency can be split into server time and network time."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = time.perf_counter()
+
+        async def send_with_timing(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                message.setdefault("headers", []).append((b"server-timing", f"app;dur={elapsed_ms:.1f}".encode()))
+            await send(message)
+
+        await self.app(scope, receive, send_with_timing)
 
 
 class SecurityHeadersMiddleware:

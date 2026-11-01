@@ -49,3 +49,23 @@ async def test_other_exceptions_propagate_unchanged() -> None:
         await handle_transaction_message(processor, TXN_ID)
 
     assert raised.value is error
+
+
+async def test_database_unavailable_becomes_short_queue_retry() -> None:
+    """A transient DB outage (e.g. pooler connection cap) retries in seconds, not after the 5-minute lease."""
+    from backend.domain.errors import PersistenceError
+    from backend.worker.handler import DB_RETRY_DELAY_SECONDS
+
+    processor = StubProcessor(error=PersistenceError("pooler full"))
+    with pytest.raises(RetryAfter) as exc_info:
+        await handle_transaction_message(processor, "txn_db")
+    assert exc_info.value.timeout_seconds == DB_RETRY_DELAY_SECONDS
+
+
+def test_worker_concurrency_is_capped_within_the_connection_budget() -> None:
+    """Workers and webhooks share the pooler's 200 client connections; workers must leave headroom."""
+    from backend.config import Settings
+    from backend.database.pool import MAX_SIZE
+
+    assert Settings(_env_file=None).worker_max_concurrency * 1 <= 50  # type: ignore[call-arg]
+    assert MAX_SIZE <= 2

@@ -1,7 +1,7 @@
 """Send one signed webhook, the way a payment processor would.
 
 Usage:
-  WEBHOOK_SIGNING_SECRET=... python scripts/send_webhook.py https://payment-s.vercel.app txn_abc123 [amount] [currency]
+  WEBHOOK_SIGNING_SECRET=... python -m scripts.send_webhook https://payment-s.vercel.app txn_abc123 [amount] [currency]
 """
 
 import hashlib

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     signature_tolerance_seconds: int = 300
     max_body_bytes: int = 16_384
     queue_topic: str = "transactions"
+    worker_max_concurrency: int = 40
+    """Concurrent queue deliveries. Workers and webhooks share the DB pooler's 200 client connections."""
     settlement_delay_seconds: float = 30.0
     settlement_fault_injection: bool = False
     """When true, ids starting with `faultinject_` fail their first settlement attempt. Live verification only."""

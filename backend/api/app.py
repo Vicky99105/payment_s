@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from backend.api.errors import register_error_handlers
-from backend.api.middleware import BodySizeLimitMiddleware, RequestIdMiddleware, SecurityHeadersMiddleware
+from backend.api.middleware import BodySizeLimitMiddleware, RequestIdMiddleware, SecurityHeadersMiddleware, ServerTimingMiddleware
 from backend.api.routes import health, transactions, webhooks
 from backend.container import Container
 
@@ -36,5 +36,6 @@ def create_app(container: Container) -> FastAPI:
     # Added last = outermost: every response, including 413s, carries a request id and the security headers.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(ServerTimingMiddleware)
     app.add_middleware(RequestIdMiddleware)
     return app

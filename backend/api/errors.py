@@ -50,7 +50,17 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(PersistenceError)
     @app.exception_handler(EnqueueError)
     async def _unavailable(request: Request, exc: Exception) -> JSONResponse:
-        logger.error("dependency unavailable", extra={"request_id": _request_id(request), "error_type": type(exc).__name__})
+        cause = exc.__cause__
+        logger.error(
+            "dependency unavailable",
+            extra={
+                "request_id": _request_id(request),
+                "error_type": type(exc).__name__,
+                # Driver/SDK error class and message (no payloads or credentials) so outages are diagnosable.
+                "cause_type": type(cause).__name__ if cause else None,
+                "cause": str(cause)[:200] if cause else None,
+            },
+        )
         return _error(request, 503, "service_unavailable", "temporarily unable to accept the request, retry later", {"Retry-After": "5"})
 
     @app.exception_handler(StarletteHTTPException)

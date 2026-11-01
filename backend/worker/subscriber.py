@@ -12,6 +12,7 @@ _settings = Settings()
 _processor = build_processor(_settings)
 
 
-@subscribe(topic=_settings.queue_topic)
+# The queue buffers bursts; bounded concurrency keeps DB connections within budget and leaves headroom for webhooks.
+@subscribe(topic=_settings.queue_topic, max_concurrency=_settings.worker_max_concurrency)
 async def process_transaction(message: Message[dict[str, str]]) -> None:
     await handle_transaction_message(_processor, message.payload["transaction_id"])

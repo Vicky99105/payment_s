@@ -10,8 +10,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
 
-MIN_SIZE = 1
-MAX_SIZE = 5
+# Supavisor caps client connections (200 on this plan) across ALL serverless instances, web and worker.
+# Each instance therefore holds connections only while using them: none at rest, at most 2 under load,
+# and idle ones close after a few seconds (so a worker sleeping through settlement holds nothing).
+MIN_SIZE = 0
+MAX_SIZE = 2
+IDLE_CONNECTION_LIFETIME_SECONDS = 5.0
 COMMAND_TIMEOUT_SECONDS = 5.0
 CONNECT_TIMEOUT_SECONDS = 5.0
 
@@ -29,6 +33,7 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
         statement_cache_size=0,
         command_timeout=COMMAND_TIMEOUT_SECONDS,
         timeout=CONNECT_TIMEOUT_SECONDS,
+        max_inactive_connection_lifetime=IDLE_CONNECTION_LIFETIME_SECONDS,
         ssl=ssl,
     )
     assert pool is not None

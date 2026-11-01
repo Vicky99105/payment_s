@@ -1,6 +1,6 @@
 """Webhook latency under load, while earlier jobs are still in their 30s settlement.
 
-Usage: python scripts/load_test.py https://payment-s.vercel.app [total=200] [concurrency=50]
+Usage: python -m scripts.load_test https://payment-s.vercel.app [total=200] [concurrency=50]
 Prints client-side p50/p95/p99/max, then waits until every transaction is PROCESSED (nothing lost).
 """
 
@@ -35,14 +35,17 @@ def pct(values: list[float], p: float) -> float:
     return ordered[min(len(ordered) - 1, round(p / 100 * (len(ordered) - 1)))]
 
 
-async def send(c: httpx.AsyncClient, sem: asyncio.Semaphore, txn_id: str) -> tuple[int, float]:
+async def send(c: httpx.AsyncClient, sem: asyncio.Semaphore, txn_id: str) -> tuple[int, float, float | None]:
     raw = json.dumps({"transaction_id": txn_id, "source_account": "acc_load_1", "destination_account": "acc_load_2", "amount": 99.99, "currency": "INR"}).encode()
     async with sem:
         ts = str(int(time.time()))
         sig = hmac.new(SECRET.encode(), ts.encode() + b"." + raw, hashlib.sha256).hexdigest()
         started = time.perf_counter()
         r = await c.post(f"{BASE}/v1/webhooks/transactions", content=raw, headers={"Content-Type": "application/json", "X-Webhook-Timestamp": ts, "X-Webhook-Signature": f"sha256={sig}"})
-        return r.status_code, (time.perf_counter() - started) * 1000
+        client_ms = (time.perf_counter() - started) * 1000
+        timing = r.headers.get("server-timing", "")
+        server_ms = float(timing.split("dur=")[1]) if "dur=" in timing else None
+        return r.status_code, client_ms, server_ms
 
 
 async def main() -> None:
@@ -54,15 +57,19 @@ async def main() -> None:
         wall = time.perf_counter()
         out = await asyncio.gather(*[send(c, sem, i) for i in ids])
         wall_ms = (time.perf_counter() - wall) * 1000
-        codes = [code for code, _ in out]
-        lat = [ms for _, ms in out]
+        codes = [code for code, _, _ in out]
+        lat = [ms for _, ms, _ in out]
+        server = [ms for _, _, ms in out if ms is not None]
         print(f"sent {TOTAL} webhooks at concurrency {CONCURRENCY} in {wall_ms:.0f}ms")
         print(f"status codes: { {code: codes.count(code) for code in set(codes)} }")
         print(f"client latency ms: p50={pct(lat, 50):.0f} p95={pct(lat, 95):.0f} p99={pct(lat, 99):.0f} max={max(lat):.0f}")
-        print(f"under 500ms: {sum(ms < 500 for ms in lat)}/{TOTAL}")
+        print(f"under 500ms (client): {sum(ms < 500 for ms in lat)}/{TOTAL}")
+        if server:
+            print(f"server latency ms (Server-Timing): p50={pct(server, 50):.0f} p95={pct(server, 95):.0f} p99={pct(server, 99):.0f} max={max(server):.0f}")
+            print(f"under 500ms (server): {sum(ms < 500 for ms in server)}/{len(server)}")
 
         key = reviewer_key()
-        deadline = time.monotonic() + 150
+        deadline = time.monotonic() + 300
         pending = set(ids)
         while pending and time.monotonic() < deadline:
             await asyncio.sleep(5)

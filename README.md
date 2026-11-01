@@ -36,6 +36,7 @@ Two services with a hard boundary: they share no memory and talk only through th
   - A retried webhook finds the row still `PROCESSING` and enqueues it again. That covers the case where the row was stored but the first enqueue failed.
 - **Worker:** `record_attempt`, then `settle` (30s), then `mark_processed`.
   - If settlement fails, the attempt and error are recorded and the worker asks the queue to redeliver after 5s, 10s, 20s ... up to 60s.
+  - If the database is briefly unavailable, the worker also asks for redelivery, after 10s.
   - If the worker process dies outright, the queue redelivers once its 5-minute lease expires.
 - **Query:** reads the row.
 
@@ -71,7 +72,7 @@ export API_KEY=...                  # provided separately
 Send a signed webhook:
 
 ```bash
-python scripts/send_webhook.py https://payment-s.vercel.app txn_demo_001
+python -m scripts.send_webhook https://payment-s.vercel.app txn_demo_001
 ```
 
 Check the transaction straight away (`PROCESSING`) and again after about 30s (`PROCESSED`):
@@ -101,8 +102,8 @@ The queue needs Vercel's environment to publish messages. Locally, webhooks are 
 ## Tests
 
 ```bash
-uv run pytest tests/unit -q          # 80 tests, < 1s, no network (services on in-memory fakes)
-uv run pytest tests/integration -q   # 19 tests: real Postgres (DATABASE_URL) + the queue SDK's local devserver
+uv run pytest tests/unit -q          # 83 tests, < 1s, no network (services on in-memory fakes)
+uv run pytest tests/integration -q   # 21 tests: real Postgres (DATABASE_URL) + the queue SDK's local devserver
 uv run mypy backend                  # strict
 uv run pip-audit
 ```
@@ -119,11 +120,37 @@ uv run pip-audit
 Against the deployed service:
 
 ```bash
-uv run python scripts/verify_live.py https://payment-s.vercel.app       # the 4 success criteria + security checks
-uv run python scripts/load_test.py https://payment-s.vercel.app 200 50  # latency percentiles under load, then confirms all processed
+uv run python -m scripts.verify_live https://payment-s.vercel.app        # the 4 success criteria + security checks
+uv run python -m scripts.load_test https://payment-s.vercel.app 200 50   # latency percentiles under load, then confirms all processed
 ```
 
 CI (`.github/workflows/ci.yml`) runs type checks, unit tests and the dependency audit on every push.
+
+## Measured results (live, 2026-11-01)
+
+Client: Python script in India calling `payment-s.vercel.app` (functions in Paris), so every client number includes about 180ms of network round trip. Server numbers come from the `Server-Timing` header, which the service adds to every response.
+
+**Success criteria** (`scripts/verify_live.py`, 14/14 checks passed)
+
+| Criterion | Result |
+|---|---|
+| Single transaction | `202`, then `PROCESSING` straight away, then `PROCESSED` 30.8s after receipt |
+| Duplicate prevention | Same id sent 10 times (5 sequential, 5 concurrent): all `202`, 1 transaction row, 10 delivery log rows, 1 processing attempt |
+| Reliability: settlement failure | Forced first-attempt failure, retried by the queue, `PROCESSED` with 2 attempts after 36.9s |
+| Reliability: worker crash | During a connection-exhaustion incident, 131 jobs whose workers crashed were redelivered after the queue's 5-minute lease, and all reached `PROCESSED`. None were lost. |
+| Security | Unsigned webhook `401`, no or wrong API key `401`, docs `404`, invalid body `422` |
+
+**Webhook latency**
+
+| Scenario | Server time (p50 / p95 / max) | Client time (p50 / p95 / max) |
+|---|---|---|
+| Warm, sequential, while background jobs are processing | 47 / 73 / 92 ms | 225 / 311 / 373 ms |
+| Warm, 50 concurrent | 65 / 125 / 130 ms | 412 / 472 / 487 ms |
+| Cold burst: 200 webhooks at 50 concurrent | 66 / 384 / 658 ms | 240 / 1886 / 2051 ms |
+
+All 200 in the cold burst were accepted (`202`) and all 200 were processed (40 at a time, about 2.5 minutes in total).
+
+**The honest caveat:** on warm instances the webhook is well inside 500ms. When a burst forces Vercel to start new instances, the first request on each new instance pays a cold start of about 1 to 1.5s. Most of that is the Python runtime and FastAPI import, before any application code runs, so `Server-Timing` doesn't see it. Production fixes are platform-level: minimum warm instances (Vercel Pro), or an always-on container.
 
 ## Technical choices
 
@@ -131,6 +158,9 @@ CI (`.github/workflows/ci.yml`) runs type checks, unit tests and the dependency 
 - **A durable queue, not a background task.** On serverless platforms a function can be frozen once the response is sent, so a `sleep(30)` after returning `202` can silently never finish. Even on a normal server, an in-process task dies with the process. Vercel Queues stores the task and redelivers it if the worker fails. That is what makes "no lost transactions" true.
   - Verified on the live platform before building: a 30s job finished at 30.0s; 50 concurrent jobs all finished in parallel; a duplicate key was processed once; a failed delivery was retried.
 - **Supabase Postgres.** Managed Postgres gives the primary key, `ON CONFLICT` and guarded `UPDATE`, which are the primitives the idempotency design rests on. The app uses the transaction pooler (asyncpg with the statement cache off), suited to many short-lived serverless connections.
+- **A fixed database connection budget.** Supabase's pooler accepts at most 200 client connections, shared by every serverless instance, web and worker. Load testing showed what happens without a budget: a burst of 200 jobs started 200 workers at once, they exhausted the cap, and webhooks got `503`. The fix:
+  - Worker concurrency is capped at 40 (`max_concurrency`). The queue buffers the rest, so a burst raises latency for background processing, never for the webhook.
+  - Each instance's pool holds 0 connections at rest and at most 2 under load, and closes idle connections after 5s, so a worker sleeping through settlement holds nothing.
 - **Co-location.** The functions run in `cdg1` (Paris), next to the database in `eu-west-3`, so each database round trip stays within the region.
 - **Deep modules behind contracts.** Every service, repository and integration is a `typing.Protocol`, with a `Default*` implementation. Routes and the worker import contracts only. `backend/composition.py` is the only module that knows concrete classes. Tests run against `Fake*` implementations of the same contracts, not mocks.
 - **More payment providers later.** The 5-field body is the canonical internal format. A new provider would get its own route plus an adapter that verifies that provider's signature and maps its payload to the canonical model. Everything after normalization stays the same. With several providers, the key would become `(provider, transaction_id)`.

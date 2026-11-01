@@ -252,3 +252,10 @@ def test_api_responses_are_never_cached_and_not_sniffable(h: Harness) -> None:
 
 def test_settings_default_to_production_so_docs_are_off_unless_opted_in() -> None:
     assert Settings(_env_file=None).env == "production"  # type: ignore[call-arg]
+
+
+def test_responses_report_server_processing_time(h: Harness) -> None:
+    r = h.post_webhook(webhook_body("txn_timing"))
+    match = re.fullmatch(r"app;dur=(\d+(\.\d+)?)", r.headers["server-timing"])
+    assert match is not None
+    assert float(match.group(1)) >= 0
